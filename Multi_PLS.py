@@ -54,7 +54,7 @@ def classifier(X, Y, subj, num_samples, mean,deviation, ddof, method, feature_se
                 Y_temp[j]=0  
     else:
         Y_temp = Y+mean
-    Y_temp=np.rint(Y_temp)
+    Y_temp=round_num(Y_temp)
 
     #choose, which classifier to use
     if method== 'rf':#build a generic Random Forest
@@ -156,7 +156,7 @@ def classifier(X, Y, subj, num_samples, mean,deviation, ddof, method, feature_se
             pred_temp = pred_temp+mean #add mean
         elif feature_selection != 'lda':
             pred_temp = pred_temp+mean
-        pred_temp = np.rint(pred_temp)
+        pred_temp = round_num(pred_temp)
 
         train_error = mean_squared_error(y_true=Y_temp, y_pred=pred_temp)
         fpr, tpr, auc = get_roc_auc(labels=Y_temp, predictions=pred_temp)#AUC if needed
@@ -200,7 +200,7 @@ def simple_classifier(X, Y, subj, num_samples, mean,deviation, ddof, method, fea
     if scaling:
         pred_temp = descale_data(matrix=pred_temp, deviation=deviation, ddof=ddof ) #descale
         pred_temp = pred_temp+mean #add mean
-        pred_temp = np.rint(pred_temp)
+        pred_temp = round_num(pred_temp)
     pred_temp = pred_temp+mean
     train_error = mean_squared_error(y_true=Y_temp, y_pred=pred_temp)
     fpr, tpr, auc = get_roc_auc(labels=Y_temp, predictions=pred_temp)#AUC if needed
@@ -208,6 +208,17 @@ def simple_classifier(X, Y, subj, num_samples, mean,deviation, ddof, method, fea
 
 
 # In[ ]:
+
+def round_num(numbers):
+	res = copy.copy(numbers)
+	for ix in range(len(numbers)):
+		if numbers[ix] >= 1:
+			res[ix] = 1
+		elif numbers[ix] <=0:
+			res[ix] = 0
+		else:
+			res[ix] = np.rint(numbers[ix])
+	return res
 
 
 def center_data(matrix, mean=None):
@@ -484,7 +495,7 @@ def cross_validation(X, Y, subj, unique_subj, num_subj, num_unique_subj, num_fol
     Y=np.array(Y)
     new_Y = np.zeros(Y.shape)
     weird_Y = np.zeros(Y.shape)
-    compare_Y = np.zeros(Y.shape)
+    #compare_Y = np.zeros(Y.shape)
     #repeat cross_validation as many times as specified
     for i in range(num_repeats): 
         kf = StratifiedKFold(n_splits=num_folds)
@@ -563,7 +574,9 @@ def cross_validation(X, Y, subj, unique_subj, num_subj, num_unique_subj, num_fol
             pred= pred.reshape(np.product(pred.shape),)
             pred = descale_data(matrix=pred, deviation=Y_train_deviation, ddof=ddof)
             pred = pred+Y_train_mean
-            pred = np.rint(pred)
+            for i in range(len(test_index)):
+                weird_Y[test_index[i]] = pred[i]
+            pred = round_num(pred)
 
             for i in range(len(test_index)):
                 new_Y[test_index[i]] = pred[i]
@@ -582,9 +595,9 @@ def cross_validation(X, Y, subj, unique_subj, num_subj, num_unique_subj, num_fol
             train_auc = train_auc+train_auc_temp
     
     #print "Y new: ", new_Y 
-    #print "Weird Y: ", weird_Y
-    #print "Scaled and centered Y: ", compare_Y
-    #print "Y: ", Y
+    print "Y predicted scores: ", weird_Y
+    print "Y predicted classes: ", new_Y
+    print "Y actual labels: ", Y
     R= r2_score(Y, new_Y) 
     acc =  accuracy_score(Y, new_Y)
     F = f1_score(Y, new_Y, average='macro')
