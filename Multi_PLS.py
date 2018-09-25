@@ -46,7 +46,6 @@ def classifier(X, Y, subj, num_samples, mean, deviation, ddof, method, feature_s
     else:
         y_temp = Y + mean
     y_temp = round_num(y_temp)
-    # print "Y_temp: ", Y_temp
 
     # choose, which classifier to use
     if method == 'rf':  # build a generic Random Forest
@@ -143,13 +142,13 @@ def classifier(X, Y, subj, num_samples, mean, deviation, ddof, method, feature_s
 
         # process the predictions
         pred_temp = pred.flatten()
-        # print "pred_temp before descaling and decentering: ", pred_temp
         if feature_selection != 'lda' and scaling:
             pred_temp = descale_data(matrix=pred_temp, deviation=deviation, ddof=ddof)  # descale
             pred_temp = pred_temp + mean  # add mean
         elif feature_selection != 'lda':
             pred_temp = pred_temp + mean
-        # print "pred_temp after descaling and decentering: ", pred_temp
+
+        #compute the error metrics
         train_error = mean_squared_error(y_true=y_temp, y_pred=pred_temp)
         fpr, tpr, auc = get_roc_auc(labels=y_temp, predictions=pred_temp)
         pred_temp = round_num(pred_temp)
@@ -169,10 +168,10 @@ def classifier(X, Y, subj, num_samples, mean, deviation, ddof, method, feature_s
 def simple_classifier(X, Y, subj, num_samples, mean, deviation, ddof, method, feature_selection, model_params,
                       num_features, step, verbose_train, scaling):
     # get original Y
+    Y_temp = np.array(Y)
     if scaling:
-        Y_temp = np.array(Y)
         Y_temp = descale_data(matrix=Y_temp, deviation=deviation, ddof=ddof)  # descale
-    Y_temp = Y + mean
+    Y_temp = Y_temp + mean
     Y_temp = round_num(Y_temp)
 
     # perform the regression
@@ -185,13 +184,11 @@ def simple_classifier(X, Y, subj, num_samples, mean, deviation, ddof, method, fe
     if scaling:
         pred_temp = descale_data(matrix=pred_temp, deviation=deviation, ddof=ddof)  # descale
     pred_temp = pred_temp + mean
-    # print "Predictions before rounding in simple_classifier: ", pred_temp
 
     train_error = mean_squared_error(y_true=Y_temp, y_pred=pred_temp)
     fpr, tpr, auc = get_roc_auc(labels=Y_temp, predictions=pred_temp)  # AUC if needed
 
     pred_temp = round_num(pred_temp)
-    # print "Predictions after rounding in simple_classifier: ", pred_temp
 
     return np.array(range(X.shape[1])), model, train_error, auc, model.coef_
 
@@ -215,11 +212,13 @@ def iterative_simple_classifier(X, Y, subj, ids, num_samples, mean, deviation, d
             if k in new_features:
                 coefficients[k] = coeff[count]
                 count = count + 1
+
         features = new_features
-        ix = np.array(np.argpartition(coeff.reshape(np.shape(coeff)[0], ), int(np.rint(new_X.shape[1] / 2)))[
+        ix = np.array(np.argpartition(np.abs(coeff.reshape(np.shape(coeff)[0], )), int(np.rint(new_X.shape[1] / 2)))[
                       -int(np.rint(new_X.shape[1] / 2)):])
         new_features = features[ix]
         new_X = X[:, new_features]
+
     return features, model, train_error, auc, coefficients
 
 
@@ -249,10 +248,12 @@ def scale_data(matrix, deviation, ddof):
     matrix_temp = copy.copy(matrix)
     if np.isnan(matrix).any():
         matrix = matrix_temp
-    elif np.count_nonzero(deviation) == 0:
+    elif np.any(np.array(deviation)==0):
         matrix = matrix_temp
     else:
         matrix = matrix / deviation
+    if np.any(np.isnan(matrix)):
+        matrix = matrix_temp
     return matrix
 
 
@@ -283,6 +284,82 @@ def plot_roc_curve(fpr, tpr, auc):
     plt.xlabel('False Positive Rate')
     plt.show()
 
+def fill_missing_values(matr):
+    matr = 1.0*matr.copy()
+    mask = matr == 0
+    inverted_mask = matr != 0
+    min_temp = 1.0*np.amin(matr[inverted_mask])
+    new_values = [(np.random.rand()*0.1+0.8)*min_temp for i in range(matr[mask].size)]
+    matr[mask]= new_values
+    return matr
+
+def fill_missing_values_by_entry(matrix_input):
+    matrix_input = 1.0*matrix_input.copy()
+    for row_num in range(len(matrix_input)):
+        matrix_input[row_num] = fill_missing_values(matrix_input[row_num])
+    return matrix_input
+
+def fill_missing_values_by_metabolite(matrix_input, IDs):
+    matrix_input = 1.0*matrix_input.copy()
+    matrix_new = []
+    good_columns = []
+    for column_num in range(matrix_input.shape[1]):
+        #print "in by_metabolite: ",matrix_input[:,column_num]
+        matr = 1.0 * matrix_input[:,column_num].copy()
+        mask = matr == 0
+        proportion_zeros = 1.0*mask.sum()/mask.size
+        #print proportion_zeros
+        if proportion_zeros<0.9:
+            inverted_mask = matr != 0
+            matr = fill_missing_values(matr)
+            min_temp = 1.0 * np.amin(matr[inverted_mask])
+            new_values = [(np.random.rand() * 0.1 + 0.8) * min_temp for i in range(matr[mask].size)]
+            matr[mask] = new_values
+            matrix_new.append(matr)
+            good_columns.append(column_num)
+    matr_new = np.column_stack(matrix_new)
+    return matr_new, IDs[good_columns]
+
+def fill_missing_values_invariable(matr):
+    matr = 1.0*matr.copy()
+    mask = matr == 0
+    inverted_mask = matr != 0
+    min_temp = 1.0*np.amin(matr[inverted_mask])
+    new_values = [0.9*min_temp for i in range(matr[mask].size)]
+    matr[mask]= new_values
+    return matr
+
+def fill_missing_values_by_entry_invariable(matrix_input):
+    matrix_input = 1.0*matrix_input.copy()
+    for row_num in range(len(matrix_input)):
+        #matrix_input[row_num] = fill_missing_values(matrix_input[row_num])
+        matr = 1.0 * matrix_input[row_num].copy()
+        mask = matr == 0
+        inverted_mask = matr != 0
+        min_temp = 1.0 * np.amin(matr[inverted_mask])
+        new_values = [0.9 * min_temp for i in range(matr[mask].size)]
+        matr[mask] = new_values
+        matrix_input[row_num] = matr
+    return matrix_input
+
+def fill_missing_values_by_metabolite_invariable(matrix_input, IDs):
+    matrix_input = 1.0*matrix_input.copy()
+    matrix_new = []
+    good_columns = []
+    for column_num in range(matrix_input.shape[1]):
+        matr = 1.0 * matrix_input[:,column_num].copy()
+        mask = matr == 0
+        proportion_zeros = 1.0*mask.sum()/mask.size
+        if proportion_zeros<0.9:
+            inverted_mask = matr != 0
+            matr = fill_missing_values(matr)
+            min_temp = 1.0 * np.amin(matr[inverted_mask])
+            new_values = [0.9 * min_temp for i in range(matr[mask].size)]
+            matr[mask] = new_values
+            matrix_new.append(matr)
+            good_columns.append(column_num)
+    matr_new = np.column_stack(matrix_new)
+    return matr_new, IDs[good_columns]
 
 # MULTILEVEL PLS
 def perform_multilevel_pls(X, Y, subj, ids, unique_subj, num_unique_subj, num_subj, scaling, par, ddof, method,
@@ -320,8 +397,6 @@ def perform_multilevel_pls(X, Y, subj, ids, unique_subj, num_unique_subj, num_su
         X_target = Xb_scaled
     elif par == 'within':
         X_target = Xw_scaled
-
-    # print "X_target in perform_multilevel_pls: ", X_target
 
     # perform classifier (PLS or other) on target data
     # features, model, train_error, train_auc, coeff= classifier(X=X_target, Y=Y_scaled, subj=subj, num_samples=num_subj,
@@ -382,9 +457,10 @@ def separate_train_test(X, Y, subj, train_subj, test_subj, num_subj):
 
 
 def full_script(num_folds, num_repeats, scaling, num_permutations, par, filename, verbose, ddof, method,
-                feature_selection, num_features, step, model_params, verbose_train, mode, num_iter):
+                feature_selection, num_features, step, model_params, verbose_train, mode, num_iter, use_kf,
+                fill_mv='whole_same', log_base=10):
     # READ OR MAKE UP DATA
-    X, Y, subj, IDs, NetCalc, frQ = read_data(filename, mode)
+    X, Y, subj, IDs, NetCalc, frQ, new_IDs = read_data(filename, mode, use_kf, fill_mv=fill_mv, log_base=log_base)
 
     # create list of unique subjects
     unique_subj = np.unique(subj)
@@ -411,12 +487,17 @@ def full_script(num_folds, num_repeats, scaling, num_permutations, par, filename
     # PERFORMING MULTILEVEL PLS ON WHOLE DATASET
 
     features, full_model, full_train_error, full_train_auc, Xb, Xw, Y_scaled, X_scaled, coeff = perform_multilevel_pls(
-        X=X, Y=Y, subj=subj, ids=IDs,
+        X=X, Y=Y, subj=subj, ids=new_IDs,
         unique_subj=unique_subj, num_subj=num_subj,
         num_unique_subj=num_unique_subj, scaling=scaling, par=par,
         ddof=ddof, method=method, feature_selection=feature_selection,
         num_features=num_features, step=step, model_params=model_params, verbose_train=verbose_train, num_iter=num_iter)
-
+    c = 0
+    coefficients = np.zeros(len(IDs))
+    for ix in range(len(IDs)):
+        if IDs[ix] in new_IDs:
+            coefficients[ix] = coeff[c]
+            c = c+1
     if method == 'pls':
         x = np.matmul(X_scaled[:, features], full_model.x_weights_[:, 0])
         if full_model.x_weights_.shape[1]>2:
@@ -427,22 +508,19 @@ def full_script(num_folds, num_repeats, scaling, num_permutations, par, filename
         ax = fig.add_subplot(111)
         plt.xlabel('PLS component 1')
         plt.ylabel('PLS component 2')
-        colors = ['green', 'orange']
         ax.scatter(x, y, c=Y)
 
-        fig.savefig(
-            mode + "_" + str(model_params['n_comp']) + "_" + str(feature_selection) + '.png')  # save the figure to file
+        fig.savefig(mode + "_" + str(model_params['n_comp']) + "_" + str(feature_selection) + '.png')  # save the figure to file
         plt.close(fig)
-
-        # print "new coefficients in full_script: ", coeff[:10]
 
     if verbose:
         print "CROSS_VALIDATION ON ACTUAL DATA: "
 
     # CROSS-VALIDATION
-    crossval_error, crossval_auc, crossval_Q, crossval_R, crossval_acc, crossval_F, crossval_train_err, crossval_train_auc = cross_validation(
+    crossval_error, crossval_auc, crossval_Q, crossval_R, crossval_acc, crossval_F, crossval_train_err, \
+    crossval_train_auc = cross_validation(
         X=X, Y=Y,
-        subj=subj, ids=IDs, unique_subj=unique_subj, num_subj=num_subj, num_unique_subj=num_unique_subj,
+        subj=subj, ids=new_IDs, unique_subj=unique_subj, num_subj=num_subj, num_unique_subj=num_unique_subj,
         num_folds=num_folds, num_repeats=num_repeats, scaling=scaling, par=par,
         verbose=verbose, ddof=ddof, method=method, feature_selection=feature_selection,
         num_features=num_features, step=step, model_params=model_params, verbose_train=verbose_train, num_iter=num_iter)
@@ -453,7 +531,7 @@ def full_script(num_folds, num_repeats, scaling, num_permutations, par, filename
     # PERMUTATE
     permutation_error, permutation_auc, permutation_Q, permutation_train_error, permutation_train_auc = validate_permutation(
         X=X, Y=Y, subj=subj,
-        ids=IDs,
+        ids=new_IDs,
         unique_subj=unique_subj,
         num_subj=num_subj,
         num_unique_subj=num_unique_subj,
@@ -483,9 +561,10 @@ def full_script(num_folds, num_repeats, scaling, num_permutations, par, filename
                'permutation_error': permutation_error, 'permutation_auc': permutation_auc,
                'permutation_Q': permutation_Q,
                'C': model_params['C'], 'gamma': model_params['gamma'], 'epsilon': model_params['epsilon'],
-               'degree': model_params['degree'], 'kernel': model_params['kernel'], 'num_iter': num_iter}
+               'degree': model_params['degree'], 'kernel': model_params['kernel'], 'num_iter': num_iter,
+               'use_kf': use_kf, 'fill_mv': fill_mv, 'log_base': log_base}
 
-    return results, coeff, IDs
+    return results, coefficients, IDs
 
 
 # CROSS-VALIDATION
@@ -500,6 +579,7 @@ def cross_validation(X, Y, subj, ids, unique_subj, num_subj, num_unique_subj, nu
     acc = 0
     R = 0
     F = 0
+    count = 0
 
     # create array of labels for each subject
     Y_temp = [Y[np.where(subj == unique_subj[i])[0][0]] for i in range(num_unique_subj)]
@@ -512,7 +592,8 @@ def cross_validation(X, Y, subj, ids, unique_subj, num_subj, num_unique_subj, nu
             train_subj = unique_subj[train_index]
             test_subj = unique_subj[test_index]
 
-            X_train, X_test, Y_train, Y_test, subj_train, subj_test, num_train_subj, num_test_subj = separate_train_test(
+            X_train, X_test, Y_train, Y_test, subj_train, subj_test, num_train_subj, num_test_subj = \
+                separate_train_test(
                 X=X, Y=Y, subj=subj,
                 train_subj=train_subj,
                 test_subj=test_subj, num_subj=num_subj)
@@ -523,7 +604,10 @@ def cross_validation(X, Y, subj, ids, unique_subj, num_subj, num_unique_subj, nu
             X_train_mean = np.mean(X_train, axis=0)
             Y_train_mean = np.mean(Y_train, axis=0)
 
-            features, model, train_error_temp, train_auc_temp, Xb_train, Xw_train, Y_scaled_train, X_scaled_train, coeff = perform_multilevel_pls(
+            count = count + 1
+
+            features, model, train_error_temp, train_auc_temp, Xb_train, Xw_train, Y_scaled_train, X_scaled_train, \
+            coeff = perform_multilevel_pls(
                 X=X_train, Y=Y_train, subj=subj_train, ids=ids,
                 unique_subj=train_subj,
                 num_unique_subj=num_unique_train_subj,
@@ -690,7 +774,7 @@ def validate_permutation(X, Y, subj, ids, unique_subj, num_subj, num_unique_subj
     return err, auc, Q, train_err, train_auc
 
 
-def read_data(file_name=None, mode='delta1', use_kf=False):
+def read_data(file_name=None, mode='delta1', use_kf=False, fill_mv='column_same', log_base=10):
     if file_name is None:  # if no input file specified, make up data
         num_subj = 30
         num_feat = 1000
@@ -769,21 +853,36 @@ def read_data(file_name=None, mode='delta1', use_kf=False):
 
         # For row 0 and column 0
         IDs = np.array(sheet.col_values(3)[8:])
+        new_IDs = IDs
         NetCalc = np.array(sheet.col_values(6)[8:])
         frQ = np.array(sheet.col_values(9)[8:])
-        new_features = [IDs[ix] in best_IDs for ix in range(len(IDs))]
 
         # take the matabolite matrix, transpose, convert to int
         X['all'] = data.values[7:, :-9].transpose().astype(np.int64)
+        if use_kf:
+            new_features = [IDs[ix] in best_IDs for ix in range(len(IDs))]
+            X['all'] = X['all'][:, new_features]
+
+        if fill_mv=='whole':
+            X['all'] = fill_missing_values(X['all'])
+        elif fill_mv == 'row':
+            X['all'] = fill_missing_values_by_entry(X['all'])
+        elif fill_mv == 'column':
+            X['all'], new_IDs = fill_missing_values_by_metabolite(X['all'], IDs)
+        elif fill_mv=='whole_same':
+            X['all'] = fill_missing_values_invariable(X['all'])
+        elif fill_mv == 'row_same':
+            X['all'] = fill_missing_values_by_entry_invariable(X['all'])
+        elif fill_mv == 'column_same':
+            X['all'], new_IDs = fill_missing_values_by_metabolite_invariable(X['all'], IDs)
+        if log_base==10:
+            X['all'] = np.log10(X['all'])
+        elif log_base==2:
+            X['all'] = np.log(X['all'])
         # take relevant values as labels, convert to int
         Y['all'] = (data.head().iloc[-3].values[0:148] == 'risk').astype(np.int64)
         # take relevant values as subject id's, convert to int
         subjects['all'] = data.head().iloc[-2].values[0:148].astype(np.int64)
-
-        if use_kf:
-            X['all'] = X['all'][:, new_features]
-            IDs = best_IDs
-
         unique_subj = np.unique(subjects['all'])
         num_unique_subj = len(unique_subj)
         num_subj = len(subjects['all'])
@@ -799,6 +898,16 @@ def read_data(file_name=None, mode='delta1', use_kf=False):
         Y['delta1'] = []
         Y['delta2'] = []
         Y['delta3'] = []
+        X['t1'] = []
+        X['t2'] = []
+        X['t0'] = []
+        subjects['t1'] = []
+        subjects['t2'] = []
+        subjects['t0'] = []
+        Y['t1'] = []
+        Y['t2'] = []
+        Y['t0'] = []
+
         for s in unique_subj:
             indeces_temp = np.where(subjects['all'] == s)[0]
             subj_time[s] = {'t0': None, 't1': None, 't2': None}
@@ -824,11 +933,41 @@ def read_data(file_name=None, mode='delta1', use_kf=False):
                 X['delta3'].append(X_temp)
                 subjects['delta3'].append(s)
                 Y['delta3'].append(Y['all'][indeces_temp[0]])
+            if subj_time[s]['t0'] is not None:
+                X_temp = (X['all'][subj_time[s]['t0']]).reshape(1, X['all'].shape[1])
+                X['t0'].append(X_temp)
+                subjects['t0'].append(s)
+                Y['t0'].append(Y['all'][indeces_temp[0]])
+            if subj_time[s]['t1'] is not None:
+                X_temp = (X['all'][subj_time[s]['t1']]).reshape(1, X['all'].shape[1])
+                X['t1'].append(X_temp)
+                subjects['t1'].append(s)
+                Y['t1'].append(Y['all'][indeces_temp[0]])
+            if subj_time[s]['t2'] is not None:
+                X_temp = (X['all'][subj_time[s]['t2']]).reshape(1, X['all'].shape[1])
+                X['t2'].append(X_temp)
+                subjects['t2'].append(s)
+                Y['t2'].append(Y['all'][indeces_temp[0]])
+
         X['delta1'] = np.vstack(X['delta1'])
         X['delta2'] = np.vstack(X['delta2'])
         X['delta3'] = np.vstack(X['delta3'])
-
-    return X[mode], np.array(Y[mode]), np.array(subjects[mode]), IDs, NetCalc, frQ
+        X['t0'] = np.vstack(X['t0'])
+        X['t1'] = np.vstack(X['t1'])
+        X['t2'] = np.vstack(X['t2'])
+        if fill_mv=='after_whole_same':
+            X[mode] = fill_missing_values_invariable(X[mode])
+        elif fill_mv=='after_row_same':
+            X[mode] = fill_missing_values_by_entry_invariable(X[mode])
+        elif fill_mv=='after_column_same':
+            X[mode], new_IDs = fill_missing_values_by_metabolite_invariable(X[mode], IDs)
+        elif fill_mv=='after_whole':
+            X[mode] = fill_missing_values(X[mode])
+        elif fill_mv=='after_row':
+            X[mode] = fill_missing_values_by_entry(X[mode])
+        elif fill_mv == 'after_column':
+            X[mode], new_IDs = fill_missing_values_by_metabolite(X[mode], IDs)
+    return X[mode], np.array(Y[mode]), np.array(subjects[mode]), IDs, NetCalc, frQ, new_IDs
 
 
 # read params from command line
@@ -859,6 +998,9 @@ parser.add_argument("-sc", dest="scaling", default=True, type=bool)
 parser.add_argument("-ddf", dest="ddof", default=1, type=int)
 parser.add_argument("-mod", dest="mode", default='all')
 parser.add_argument("-ni", dest="num_iterations", default=1, type=int)
+parser.add_argument("-ukf", dest="use_kirills_features", default=False, type=bool)
+parser.add_argument("-mis_val", dest="fill_missing_values", default="column_same")
+parser.add_argument("-lb", dest="log_base", default=10, type=int)
 args = parser.parse_args()
 
 # run script with parameters
@@ -890,13 +1032,26 @@ model_params['svm']['degree'] = args.degree
 model_params['pls']['n_comp'] = args.num_comp
 model_params['lda']['n_comp'] = args.num_comp
 
-# betas = {'all':[], 'delta1':[], 'delta2':[], 'delta3':[], 'within':[], 'between':[], 'ID':[]}
-# modes = ['delta1', 'all', 'between', 'within', 'delta2', 'delta3']
+#betas = {'all':[], 'delta1':[], 'delta2':[], 'delta3':[], 'within':[], 'between':[], 't0':[], 't1':[], 't2':[], 'ID':[]}
+#modes = ['delta1', 'all', 'between', 'within', 'delta2', 'delta3', 't0', 't1', 't2']
+#modes = ['t0']
+#betas = {'t0': []}
+#modes = ['delta1', 'delta2', 'delta3']
+#betas = {'delta1': [], 'delta2':[], 'delta3':[]}
+#modes = ['delta1', 'delta2']
+#betas = {'delta1': [], 'delta2':[]}
 modes = ['delta1']
 betas = {'delta1': []}
 
-num_iterations = [1, 2, 3, 4, 5, 6, 7]
+#num_components = [1]
+#num_iterations = [1, 2, 3, 4, 5]
+#num_components = [2, 3]
+#num_iterations = [1, 2, 3, 4, 5, 6, 7]
 num_components = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+num_iterations = [1]
+
+
+#args.use_kirills_features = True
 # epsilons = [0.0000001, 0.000001, 0.00001, 0.0001, 0.001, 0.01, 0.1]
 # c_values = [1, 10, 100, 1000, 10000, 100000]
 for ni in num_iterations:
@@ -920,7 +1075,9 @@ for ni in num_iterations:
             results_temp, coef, IDs = full_script(args.num_folds, args.num_repeats, args.scaling, args.num_permutations,
                                                   args.matrix, args.file_name, args.verbose, args.ddof, args.method,
                                                   args.feature_selection, args.num_features, args.step,
-                                                  model_params[args.method], args.verbose_train, args.mode, args.num_iterations)
+                                                  model_params[args.method], args.verbose_train, args.mode,
+                                                  args.num_iterations, args.use_kirills_features,
+                                                  args.fill_missing_values, args.log_base)
             results_temp['mode'] = m
             print "Results: ", results_temp
             betas[m] = coef
@@ -930,7 +1087,7 @@ for ni in num_iterations:
         betas_t = betas
         betas_t['ID'] = IDs
 
-        dest_file = "coef_pls_" + str(model_params['pls']['n_comp']) + ".csv"
+        dest_file = "coef_pls_" + str(model_params['pls']['n_comp']) + "_"+str(args.num_iterations)+".csv"
         with open(dest_file, 'w') as csvfile:
             writer = csv.writer(csvfile)
             writer.writerow(betas_t.keys())
@@ -942,7 +1099,8 @@ res_file = "res2_" + args.method + "_" + str(args.num_features) + "_" + str(args
 with open(res_file, 'w') as csvfile:
     fieldnames = ['crossval_auc', 'crossval_error', 'crossval_Q', 'crossval_train_auc', 'crossval_train_err',
                   'method', 'feature_selection', 'num_features', 'step', 'n_trees', 'max_depth', 'max_features',
-                  'num_comp', 'C', 'epsilon', 'kernel', 'gamma', 'degree', 'mode']
+                  'num_comp', 'C', 'epsilon', 'kernel', 'gamma', 'degree', 'mode', 'num_iter', 'crossval_acc', 'crossval_F',
+                  'crossval_R', 'use_kf', 'fill_mv', 'log_base']
     writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
     writer.writeheader()
     for r in results:
