@@ -31,7 +31,7 @@ import copy
 import xlrd
 
 
-def classifier(X, Y, subj, num_samples, mean, deviation, ddof, method, feature_selection, model_params,
+def classifier(X, Y, ids, num_samples, mean, deviation, ddof, method, feature_selection, model_params,
                num_features, step, verbose_train, scaling):
     # process the labels
     if scaling:
@@ -126,16 +126,7 @@ def classifier(X, Y, subj, num_samples, mean, deviation, ddof, method, feature_s
             coeff = model.feature_importances_.flatten()
         elif method == 'pls':
             coeff = model.coef_
-            # print "What about ", model.x_scores_
-            # print "Mean of coeff: ", np.mean(model.coef_)
-            # print "Standard deviation of coeff: ", np.std(model.coef_)
-            # print "Max of coeff: ", np.amax(model.coef_)
-            # print "Min of coeff: ", np.amin(model.coef_)
-            # print "Mean of new coeff: ", np.mean(coeff)
-            # print "Standard deviation of coeff: ", np.std(coeff)
-            # print "Max of new coeff: ", np.amax(coeff)
-            # print "Min of new coeff: ", np.amin(coeff)
-        elif method == 'svm':  # and model_params['kernel']=='linear') :
+        elif method == 'svm':
             coeff = model.coef_.flatten()
         else:
             coeff = np.zeros(X.shape[1])
@@ -153,6 +144,17 @@ def classifier(X, Y, subj, num_samples, mean, deviation, ddof, method, feature_s
         fpr, tpr, auc = get_roc_auc(labels=y_temp, predictions=pred_temp)
         pred_temp = round_num(pred_temp)
 
+        coefficients = np.zeros(X.shape[1])
+        count = 0
+        for k in range(X.shape[1]):
+            if k in features:
+                coefficients[k] = coeff[count]
+                count = count + 1
+
+        l1, l2, l3 = zip(*sorted(zip(np.absolute(coeff), coeff.flatten(), ids[features]), reverse=True))
+        l2 = [round(el, 6) for el in l2]
+        print "Coefficients sorted: ", zip(l2, l3)
+
         # AUC if needed
 
         if verbose_train:
@@ -160,9 +162,8 @@ def classifier(X, Y, subj, num_samples, mean, deviation, ddof, method, feature_s
             print "Training error computed in library: ", train_error_temp
             print "Training auc: ", auc
             plot_roc_curve(fpr, tpr, auc)
-        # print "coefficients(betas?): ", coeff[:10]
 
-    return features, model, train_error, auc, coeff
+    return features, model, train_error, auc, coefficients
 
 
 def simple_classifier(X, Y, subj, num_samples, mean, deviation, ddof, method, feature_selection, model_params,
@@ -198,6 +199,7 @@ def iterative_simple_classifier(X, Y, subj, ids, num_samples, mean, deviation, d
                                 num_features, step, verbose_train, scaling, num_iter):
     new_X = copy.copy(X)
     new_features = np.array(range(X.shape[1]))
+
     for i in range(num_iter):
         __, model, train_error, auc, coeff = simple_classifier(X=new_X, Y=Y, subj=subj, num_samples=num_samples,
                                                                mean=mean, deviation=deviation,
@@ -206,6 +208,12 @@ def iterative_simple_classifier(X, Y, subj, ids, num_samples, mean, deviation, d
                                                                model_params=model_params, num_features=num_features,
                                                                step=step,
                                                                verbose_train=verbose_train, scaling=scaling)
+
+        l1, l2, l3 = zip(*sorted(zip(np.absolute(coeff), coeff.flatten(), ids[new_features]), reverse=True))
+        l2 = [round(el, 6) for el in l2]
+        print "Coefficients sorted: ", zip(l2, l3)
+
+
         coefficients = np.zeros(X.shape[1])
         count = 0
         for k in range(X.shape[1]):
@@ -214,9 +222,7 @@ def iterative_simple_classifier(X, Y, subj, ids, num_samples, mean, deviation, d
                 count = count + 1
 
         features = new_features
-        ix = np.array(np.argpartition(np.abs(coeff.reshape(np.shape(coeff)[0], )), int(np.rint(new_X.shape[1] / 2)))[
-                      -int(np.rint(new_X.shape[1] / 2)):])
-        new_features = features[ix]
+        new_features = np.where(np.in1d(ids,l3[:len(l3)/2]))[0]
         new_X = X[:, new_features]
 
     return features, model, train_error, auc, coefficients
@@ -304,16 +310,14 @@ def fill_missing_values_by_metabolite(matrix_input, IDs):
     matrix_new = []
     good_columns = []
     for column_num in range(matrix_input.shape[1]):
-        #print "in by_metabolite: ",matrix_input[:,column_num]
         matr = 1.0 * matrix_input[:,column_num].copy()
         mask = matr == 0
         proportion_zeros = 1.0*mask.sum()/mask.size
-        #print proportion_zeros
         if proportion_zeros<0.9:
             inverted_mask = matr != 0
             matr = fill_missing_values(matr)
             min_temp = 1.0 * np.amin(matr[inverted_mask])
-            new_values = [(np.random.rand() * 0.1 + 0.8) * min_temp for i in range(matr[mask].size)]
+            new_values = [(np.random.rand() * 0.1 + 0.85) * min_temp for i in range(matr[mask].size)]
             matr[mask] = new_values
             matrix_new.append(matr)
             good_columns.append(column_num)
@@ -332,7 +336,6 @@ def fill_missing_values_invariable(matr):
 def fill_missing_values_by_entry_invariable(matrix_input):
     matrix_input = 1.0*matrix_input.copy()
     for row_num in range(len(matrix_input)):
-        #matrix_input[row_num] = fill_missing_values(matrix_input[row_num])
         matr = 1.0 * matrix_input[row_num].copy()
         mask = matr == 0
         inverted_mask = matr != 0
@@ -360,6 +363,22 @@ def fill_missing_values_by_metabolite_invariable(matrix_input, IDs):
             good_columns.append(column_num)
     matr_new = np.column_stack(matrix_new)
     return matr_new, IDs[good_columns]
+
+def fill_missing_values_by_metabolite_no_deletions_invariable(matrix_input, IDs):
+    matrix_input = 1.0*matrix_input.copy()
+    matrix_new = []
+    for column_num in range(matrix_input.shape[1]):
+        matr = 1.0 * matrix_input[:,column_num].copy()
+        mask = matr == 0
+        proportion_zeros = 1.0*mask.sum()/mask.size
+        inverted_mask = matr != 0
+        matr = fill_missing_values(matr)
+        min_temp = 1.0 * np.amin(matr[inverted_mask])
+        new_values = [0.9 * min_temp for i in range(matr[mask].size)]
+        matr[mask] = new_values
+        matrix_new.append(matr)
+    matr_new = np.column_stack(matrix_new)
+    return matr_new, IDs
 
 # MULTILEVEL PLS
 def perform_multilevel_pls(X, Y, subj, ids, unique_subj, num_unique_subj, num_subj, scaling, par, ddof, method,
@@ -397,17 +416,18 @@ def perform_multilevel_pls(X, Y, subj, ids, unique_subj, num_unique_subj, num_su
         X_target = Xb_scaled
     elif par == 'within':
         X_target = Xw_scaled
-
-    # perform classifier (PLS or other) on target data
-    # features, model, train_error, train_auc, coeff= classifier(X=X_target, Y=Y_scaled, subj=subj, num_samples=num_subj,
-    #                                                       mean=np.mean(Y), deviation= np.std(Y, axis=0, ddof=ddof), 
-    #                                                       ddof=ddof, method=method, 
-    #                                                       feature_selection=feature_selection, 
-    #                                                       num_features=num_features, step=step, 
-    #                                                       model_params=model_params, verbose_train=verbose_train, 
+    if num_features == 0:
+        num_features = X_target.shape[1]/(np.power(2, num_iter))
+    #perform classifier (PLS or other) on target data
+    #features, model, train_error, train_auc, coeff= classifier(X=X_target, Y=Y_scaled, ids=ids, num_samples=num_subj,
+    #                                                       mean=np.mean(Y), deviation= np.std(Y, axis=0, ddof=ddof),
+    #                                                       ddof=ddof, method=method,
+    #                                                       feature_selection=feature_selection,
+    #                                                       num_features=num_features, step=step,
+    #                                                       model_params=model_params, verbose_train=verbose_train,
     #                                                       scaling=scaling)
-    #
-    #
+
+
     features, model, train_error, train_auc, coeff = iterative_simple_classifier(X=X_target, Y=Y_scaled, subj=subj,
                                                                                  ids=ids, num_samples=num_subj,
                                                                                  mean=np.mean(Y),
@@ -426,7 +446,6 @@ def perform_multilevel_pls(X, Y, subj, ids, unique_subj, num_unique_subj, num_su
     #                                                       num_features=num_features, step=step, 
     #                                                       model_params=model_params, verbose_train=verbose_train, 
     #                                                       scaling=scaling)
-    # print "coeffs in perform_multilevel_pls: ", coeff[:10]
 
     return features, model, train_error, train_auc, Xb, Xw, Y_scaled, X_scaled, coeff
 
@@ -464,10 +483,13 @@ def full_script(num_folds, num_repeats, scaling, num_permutations, par, filename
 
     # create list of unique subjects
     unique_subj = np.unique(subj)
+
     # the number of entries = number of subjects corresponding to entries (1 subject per entry)
     num_subj = len(subj)
+
     # the number of unique subjects
     num_unique_subj = len(unique_subj)
+
     # initialization of errors
     error = 0
     permutation_error = None
@@ -492,6 +514,8 @@ def full_script(num_folds, num_repeats, scaling, num_permutations, par, filename
         num_unique_subj=num_unique_subj, scaling=scaling, par=par,
         ddof=ddof, method=method, feature_selection=feature_selection,
         num_features=num_features, step=step, model_params=model_params, verbose_train=verbose_train, num_iter=num_iter)
+
+
     c = 0
     coefficients = np.zeros(len(IDs))
     for ix in range(len(IDs)):
@@ -879,6 +903,7 @@ def read_data(file_name=None, mode='delta1', use_kf=False, fill_mv='column_same'
             X['all'] = np.log10(X['all'])
         elif log_base==2:
             X['all'] = np.log(X['all'])
+        #print "Full X in the beginning: ", X['all']
         # take relevant values as labels, convert to int
         Y['all'] = (data.head().iloc[-3].values[0:148] == 'risk').astype(np.int64)
         # take relevant values as subject id's, convert to int
@@ -955,6 +980,7 @@ def read_data(file_name=None, mode='delta1', use_kf=False, fill_mv='column_same'
         X['t0'] = np.vstack(X['t0'])
         X['t1'] = np.vstack(X['t1'])
         X['t2'] = np.vstack(X['t2'])
+
         if fill_mv=='after_whole_same':
             X[mode] = fill_missing_values_invariable(X[mode])
         elif fill_mv=='after_row_same':
@@ -967,6 +993,7 @@ def read_data(file_name=None, mode='delta1', use_kf=False, fill_mv='column_same'
             X[mode] = fill_missing_values_by_entry(X[mode])
         elif fill_mv == 'after_column':
             X[mode], new_IDs = fill_missing_values_by_metabolite(X[mode], IDs)
+        #print "new_IDs in read_data: ", new_IDs
     return X[mode], np.array(Y[mode]), np.array(subjects[mode]), IDs, NetCalc, frQ, new_IDs
 
 
@@ -978,8 +1005,8 @@ parser.add_argument("-eps", dest="epsilon", default=0.1, type=float)
 parser.add_argument("-ker", dest="kernel", default='rbf')
 parser.add_argument("-gam", dest="gamma", default=0.0001, type=float)
 parser.add_argument("-deg", dest="degree", default=3, type=int)
-parser.add_argument("-fs", dest="feature_selection", default=None)
-parser.add_argument("-step", dest="step", default=0.3, type=float)
+parser.add_argument("-fs", dest="feature_selection", default='rfe')
+parser.add_argument("-step", dest="step", default=0.5, type=float)
 parser.add_argument("-nfe", dest="num_features", default=0, type=int)
 parser.add_argument("-v", dest="verbose", default=False, type=bool)
 parser.add_argument("-m", dest="method", default='pls')
@@ -991,7 +1018,7 @@ parser.add_argument("-nt", dest="num_trees", default=200, type=int)
 parser.add_argument("-md", dest="max_depth", default=4, type=int)
 parser.add_argument("-mf", dest="max_features", default=1, type=int)
 parser.add_argument("-msl", dest="min_samples_leaf", default=1, type=int)
-parser.add_argument("-nr", dest="num_repeats", default=1, type=int)
+parser.add_argument("-nr", dest="num_repeats", default=0, type=int)
 parser.add_argument("-np", dest="num_permutations", default=0, type=int)
 parser.add_argument("-nf", dest="num_folds", default=20, type=int)
 parser.add_argument("-sc", dest="scaling", default=True, type=bool)
@@ -1032,28 +1059,12 @@ model_params['svm']['degree'] = args.degree
 model_params['pls']['n_comp'] = args.num_comp
 model_params['lda']['n_comp'] = args.num_comp
 
-#betas = {'all':[], 'delta1':[], 'delta2':[], 'delta3':[], 'within':[], 'between':[], 't0':[], 't1':[], 't2':[], 'ID':[]}
-#modes = ['delta1', 'all', 'between', 'within', 'delta2', 'delta3', 't0', 't1', 't2']
-#modes = ['t0']
-#betas = {'t0': []}
-#modes = ['delta1', 'delta2', 'delta3']
-#betas = {'delta1': [], 'delta2':[], 'delta3':[]}
-#modes = ['delta1', 'delta2']
-#betas = {'delta1': [], 'delta2':[]}
-modes = ['delta1']
-betas = {'delta1': []}
+betas = {'delta1':[], 'delta2':[], 'delta3':[], 't0':[], 't1':[], 't2':[], 'ID':[]}
+modes = ['delta1', 'delta2', 'delta3', 't0', 't1', 't2']
 
-#num_components = [1]
-#num_iterations = [1, 2, 3, 4, 5]
-#num_components = [2, 3]
-#num_iterations = [1, 2, 3, 4, 5, 6, 7]
 num_components = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-num_iterations = [1]
+num_iterations = [1, 2, 3, 4, 5]
 
-
-#args.use_kirills_features = True
-# epsilons = [0.0000001, 0.000001, 0.00001, 0.0001, 0.001, 0.01, 0.1]
-# c_values = [1, 10, 100, 1000, 10000, 100000]
 for ni in num_iterations:
     for nc in num_components:
         args.num_iterations = ni
