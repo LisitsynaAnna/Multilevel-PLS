@@ -166,6 +166,94 @@ def classifier(X, Y, ids, num_samples, mean, deviation, ddof, method, feature_se
     return features, model, train_error, auc, coefficients
 
 
+def simpler_classifier(X, Y, num_samples, mean, deviation, ddof, method, feature_selection, model_params,
+                      verbose_train, scaling, ids):
+    # process the labels
+    if scaling:
+        y_temp = np.array(Y)
+        y_temp = descale_data(matrix=y_temp, deviation=deviation, ddof=ddof)  # descale
+        y_temp = y_temp + mean  # add mean
+        for j in range(len(y_temp)):
+            if y_temp[j] > 1:
+                y_temp[j] = 1
+            elif y_temp[j] < 0:
+                y_temp[j] = 0
+    else:
+        y_temp = Y + mean
+    y_temp = round_num(y_temp)
+
+    # choose, which classifier to use
+    if method == 'rf':  # build a generic Random Forest
+        model = RandomForestRegressor(n_estimators=model_params['n_trees'], random_state=0,
+                                      max_features=model_params['max_features'], max_depth=model_params['max_depth'],
+                                      min_samples_leaf=model_params['min_samples_leaf'])
+    elif method == 'pls':
+        model = PLSRegression(n_components=model_params['n_comp'], scale=False)  # initialize a generic PLS model
+
+    elif method == 'svm':
+        model = SVR(C=model_params['C'], epsilon=model_params['epsilon'], kernel=model_params['kernel'],
+                    gamma=model_params['gamma'], degree=model_params['degree'])
+    elif method == 'lda':
+        model = LinearDiscriminantAnalysis()
+    if method == 'nn':
+        from keras.wrappers.scikit_learn import KerasRegressor
+        from keras.models import Sequential
+        from keras.layers import Dense, Activation
+        import tensorflow
+        coeff = np.zeros(X.shape[1])
+        features = [True for f in range(X.shape[1])]
+        estimator = KerasRegressor(build_fn=baseline_model, epochs=100, batch_size=5, verbose=0)
+        model = estimator
+        sfold = StratifiedKFold(n_splits=15)
+        results = cross_val_score(estimator, X, y_temp, cv=sfold)
+        estimator.fit(X, y_temp)
+        print("Results: %.2f (%.2f) MSE" % (results.mean(), results.std()))
+        auc = 0
+        train_error = 0
+    else:
+        # fit the model
+        if method == 'lda':
+            model.fit(X, y_temp)
+        elif method:
+            model.fit(X, Y)  # ACTUALLY getting the classifier model, fit model to data
+            pred = model.predict(X)  # predict the values on the train set
+
+        # get coefficients
+        if method == 'rf':
+            coeff = model.feature_importances_.flatten()
+        elif method == 'pls':
+            coeff = model.coef_
+        elif method == 'svm':
+            coeff = model.coef_.flatten()
+        else:
+            coeff = np.zeros(X.shape[1])
+
+        # process the predictions
+        pred_temp = pred.flatten()
+        if feature_selection != 'lda' and scaling:
+            pred_temp = descale_data(matrix=pred_temp, deviation=deviation, ddof=ddof)  # descale
+            pred_temp = pred_temp + mean  # add mean
+        elif feature_selection != 'lda':
+            pred_temp = pred_temp + mean
+
+        #compute the error metrics
+        train_error = mean_squared_error(y_true=y_temp, y_pred=pred_temp)
+        fpr, tpr, auc = get_roc_auc(labels=y_temp, predictions=pred_temp)
+        pred_temp = round_num(pred_temp)
+
+        #l1, l2, l3 = zip(*sorted(zip(np.absolute(coeff), coeff.flatten(), ids), reverse=True))
+        #l2 = [round(el, 6) for el in l2]
+        #print "Coefficients sorted(simple): ", zip(l2, l3)
+
+        if verbose_train:
+            print "Training error: ", train_error / num_samples
+            print "Training error computed in library: ", train_error_temp
+            print "Training auc: ", auc
+            plot_roc_curve(fpr, tpr, auc)
+
+    return model, train_error, auc, coeff
+
+
 def simple_classifier(X, Y, subj, num_samples, mean, deviation, ddof, method, feature_selection, model_params,
                       num_features, step, verbose_train, scaling):
     # get original Y
@@ -201,17 +289,18 @@ def iterative_simple_classifier(X, Y, subj, ids, num_samples, mean, deviation, d
     new_features = np.array(range(X.shape[1]))
 
     for i in range(num_iter):
-        __, model, train_error, auc, coeff = simple_classifier(X=new_X, Y=Y, subj=subj, num_samples=num_samples,
+        model, train_error, auc, coeff = simpler_classifier(X=new_X, Y=Y, num_samples=num_samples,
                                                                mean=mean, deviation=deviation,
                                                                ddof=ddof, method=method,
                                                                feature_selection=feature_selection,
-                                                               model_params=model_params, num_features=num_features,
-                                                               step=step,
-                                                               verbose_train=verbose_train, scaling=scaling)
+                                                               model_params=model_params,
+                                                               verbose_train=verbose_train,
+                                                               scaling=scaling, ids=ids[new_features])
 
         l1, l2, l3 = zip(*sorted(zip(np.absolute(coeff), coeff.flatten(), ids[new_features]), reverse=True))
         l2 = [round(el, 6) for el in l2]
-        print "Coefficients sorted: ", zip(l2, l3)
+        #TODO change back
+        #print "Coefficients sorted(iter): ", zip(l2, l3)
 
 
         coefficients = np.zeros(X.shape[1])
@@ -1018,7 +1107,7 @@ parser.add_argument("-nt", dest="num_trees", default=200, type=int)
 parser.add_argument("-md", dest="max_depth", default=4, type=int)
 parser.add_argument("-mf", dest="max_features", default=1, type=int)
 parser.add_argument("-msl", dest="min_samples_leaf", default=1, type=int)
-parser.add_argument("-nr", dest="num_repeats", default=0, type=int)
+parser.add_argument("-nr", dest="num_repeats", default=1, type=int)
 parser.add_argument("-np", dest="num_permutations", default=0, type=int)
 parser.add_argument("-nf", dest="num_folds", default=20, type=int)
 parser.add_argument("-sc", dest="scaling", default=True, type=bool)
@@ -1062,12 +1151,24 @@ model_params['lda']['n_comp'] = args.num_comp
 betas = {'delta1':[], 'delta2':[], 'delta3':[], 't0':[], 't1':[], 't2':[], 'ID':[]}
 modes = ['delta1', 'delta2', 'delta3', 't0', 't1', 't2']
 
+#num_components = [3]
+#num_iterations = [1]
 num_components = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 num_iterations = [1, 2, 3, 4, 5]
 
+C_values                = [0.1, 1, 10, 100, 1000, 10000, 100000, 1000000, 10000000]
+eps_values              = [0.0000001, 0.000001, 0.00001, 0.0001, 0.001, 0.001, 0.1, 1]
+gamma_values            = [0.00000001, 0.0000001, 0.000001, 0.00001, 0.0001, 0.001, 0.1, 1]
+kernel_values           = ['linear']#, 'rbf']
+n_trees_values          = [5, 10, 20, 50, 100, 200, 300, 500]
+max_features_values     = [1, 0.9, 0.8, 0.7, 0.5]
+max_depth_values        = [2, 3, 4, 5, None]
+min_samples_leaf_values = [1, 2, 3, 4, 5, 10]
+
 for ni in num_iterations:
+    args.num_iterations = ni
+    args.method = 'pls'
     for nc in num_components:
-        args.num_iterations = ni
         model_params['pls']['n_comp'] = nc
         for m in modes:
             if m == 'all':
@@ -1103,6 +1204,134 @@ for ni in num_iterations:
             writer = csv.writer(csvfile)
             writer.writerow(betas_t.keys())
             writer.writerows(zip(*betas_t.values()))  # .sort(key = lambda t: t[1]))
+
+    args.method = 'svm'
+    for c in C_values:
+        for eps in eps_values:
+            for k in kernel_values:
+                for g in gamma_values:
+                    for m in modes:
+                        if m == 'all':
+                            args.matrix = 'all'
+                            args.mode = 'all'
+                        elif m == 'between':
+                            args.matrix = 'between'
+                            args.mode = 'all'
+                        elif m == 'within':
+                            args.matrix = 'within'
+                            args.mode = 'all'
+                        else:
+                            args.mode = m
+                            args.matrix = 'all'
+                        model_params['svm']['C'] = c
+                        model_params['svm']['epsilon'] = eps
+                        model_params['svm']['kernel'] = k
+                        model_params['svm']['gamma'] = g
+                        results_temp, coef, IDs = full_script(args.num_folds, args.num_repeats, args.scaling,
+                                                              args.num_permutations,
+                                                              args.matrix, args.file_name, args.verbose, args.ddof,
+                                                              args.method,
+                                                              args.feature_selection, args.num_features, args.step,
+                                                              model_params[args.method], args.verbose_train, args.mode,
+                                                              args.num_iterations, args.use_kirills_features,
+                                                              args.fill_missing_values, args.log_base)
+                        results_temp['mode'] = m
+                        print "Results: ", results_temp
+                        sys.stdout.flush()
+                        results.append(results_temp)
+
+    args.method = 'lda'
+    for num_comp in num_components:
+        model_params['lda']['n_comp'] = num_comp
+        for m in modes:
+            if m == 'all':
+                args.matrix = 'all'
+                args.mode = 'all'
+            elif m == 'between':
+                args.matrix = 'between'
+                args.mode = 'all'
+            elif m == 'within':
+                args.matrix = 'within'
+                args.mode = 'all'
+            else:
+                args.mode = m
+                args.matrix = 'all'
+            results_temp, coef, IDs = full_script(args.num_folds, args.num_repeats, args.scaling,
+                                                  args.num_permutations,
+                                                  args.matrix, args.file_name, args.verbose, args.ddof,
+                                                  args.method,
+                                                  args.feature_selection, args.num_features, args.step,
+                                                  model_params[args.method], args.verbose_train, args.mode,
+                                                  args.num_iterations, args.use_kirills_features,
+                                                  args.fill_missing_values, args.log_base)
+            results_temp['mode'] = m
+            print "Results: ", results_temp
+            sys.stdout.flush()
+            results.append(results_temp)
+
+    # args.method = 'nn'
+    # for m in modes:
+    #     if m == 'all':
+    #         args.matrix = 'all'
+    #         args.mode = 'all'
+    #     elif m == 'between':
+    #         args.matrix = 'between'
+    #         args.mode = 'all'
+    #     elif m == 'within':
+    #         args.matrix = 'within'
+    #         args.mode = 'all'
+    #     else:
+    #         args.mode = m
+    #         args.matrix = 'all'
+    #     results_temp, coef, IDs = full_script(args.num_folds, args.num_repeats, args.scaling,
+    #                                           args.num_permutations,
+    #                                           args.matrix, args.file_name, args.verbose, args.ddof,
+    #                                           args.method,
+    #                                           args.feature_selection, args.num_features, args.step,
+    #                                           model_params[args.method], args.verbose_train, args.mode,
+    #                                           args.num_iterations, args.use_kirills_features,
+    #                                           args.fill_missing_values, args.log_base)
+    #     results_temp['mode'] = m
+    #     print "Results: ", results_temp
+    #     sys.stdout.flush()
+    #     results.append(results_temp)
+
+
+    args.method = 'rf'
+    for num_trees in n_trees_values:
+        for max_features in max_features_values:
+            for max_depth in max_depth_values:
+                for min_samples_leaf in min_samples_leaf_values:
+                    for m in modes:
+                        if m == 'all':
+                            args.matrix = 'all'
+                            args.mode = 'all'
+                        elif m == 'between':
+                            args.matrix = 'between'
+                            args.mode = 'all'
+                        elif m == 'within':
+                            args.matrix = 'within'
+                            args.mode = 'all'
+                        else:
+                            args.mode = m
+                            args.matrix = 'all'
+                        model_params['rf']['n_trees'] = num_trees
+                        model_params['rf']['max_depth'] = max_depth
+                        model_params['rf']['max_features'] = max_features
+                        model_params['rf']['min_samples_leaf'] = min_samples_leaf
+                        results_temp, coef, IDs = full_script(args.num_folds, args.num_repeats, args.scaling,
+                                                              args.num_permutations,
+                                                              args.matrix, args.file_name, args.verbose, args.ddof,
+                                                              args.method,
+                                                              args.feature_selection, args.num_features, args.step,
+                                                              model_params[args.method], args.verbose_train, args.mode,
+                                                              args.num_iterations, args.use_kirills_features,
+                                                              args.fill_missing_values, args.log_base)
+                        results_temp['mode'] = m
+                        print "Results: ", results_temp
+                        sys.stdout.flush()
+                        results.append(results_temp)
+
 
 res_file = "res2_" + args.method + "_" + str(args.num_features) + "_" + str(args.feature_selection) + "_" + str(
             args.step) +".csv"
